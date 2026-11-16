@@ -98,19 +98,27 @@
       : '<span class="pill live">Token live</span>';
   }
 
+  function verdictPill(r) {
+    if (r.verdict === 'Farm') return '<span class="pill farm">Farm</span>';
+    if (r.verdict === 'Thin') return '<span class="pill thin">Thin</span>';
+    if (r.verdict === 'Skip') return '<span class="pill skip">Skip</span>';
+    return '<span>—</span>';
+  }
+
   function modelCard() {
     var m = R.meta;
     return '<section class="card"><h2>How the value is computed</h2>' +
-      '<p><span class="model-line">implied = TVL × ' + m.base_multiple.toFixed(3) + ' × growth × age</span></p>' +
-      '<p>' + esc(R.model_note) + '</p>' +
+      '<p><span class="model-line">' + esc(m.model) + '</span></p>' +
+      '<p>A fitted regression, not a rule of thumb: the four coefficients are estimated by ordinary least squares on the ' + m.comps_count + ' traded tokens in this snapshot that are comparable peers (market cap and TVL both positive, excluding centralised exchanges, liquid staking/restaking, bridges and restaked BTC). It is validated out of sample — 5-fold cross-validation misses by ×' + m.cv5_factor.toFixed(2) + ' (median multiplicative error), and an age-cohort holdout (fit the 34 older-listed comps, test the 34 newer-listed ones; 68 dated comps, 22 excluded for missing dates) misses by ×' + m.time_split_factor.toFixed(2) + ' (R² ' + m.r2.toFixed(2) + '). Each protocol also carries a bootstrap band (10th–90th percentile of 200 refits on resampled comps, fixed seed; fit uncertainty only, not the range of possible outcomes). No protocol name is hardcoded anywhere: every figure is read off the snapshot.</p>' +
       '<div class="stats">' +
       '<div class="stat"><b>' + m.rows + '</b><span>protocols ranked</span></div>' +
       '<div class="stat"><b>' + m.watchlist_rows + '</b><span>watchlist covered</span></div>' +
       '<div class="stat"><b>' + m.other_rows + '</b><span>other, no token recorded</span></div>' +
       '<div class="stat"><b>' + m.live_rows + '</b><span>live comparisons</span></div>' +
-      '<div class="stat"><b>' + m.base_multiple.toFixed(3) + '</b><span>market multiple (median mcap/TVL, n=' + m.live_count + ')</span></div>' +
-      '<div class="stat"><b>' + m.multiple_q25.toFixed(3) + '–' + m.multiple_q75.toFixed(3) + '</b><span>peer multiple, interquartile range</span></div>' +
-      '</div><p style="margin-top:10px">' + m.unranked + ' protocols record a token but no usable market cap and are not ranked.</p></section>';
+      '<div class="stat"><b>×' + m.time_split_factor.toFixed(2) + '</b><span>age-cohort holdout miss</span></div>' +
+      '<div class="stat"><b>×' + m.cv5_factor.toFixed(2) + '</b><span>5-fold cross-validation miss</span></div>' +
+      '<div class="stat"><b>' + m.farm_count + ' / ' + m.thin_count + ' / ' + m.skip_count + '</b><span>verdicts: Farm / Thin / Skip</span></div>' +
+      '</div><p style="margin-top:10px">' + m.unranked + ' protocols record a token but no usable market cap and are not ranked. Verdict rule (screening priority, not a promise of airdrop return — allocation, eligibility and launch probability are not modelled): Farm when the implied value is above the median over all ranked pre-token protocols ($' + Math.round(m.pre_token_median_implied).toLocaleString('en-US') + ') and the plan costs under $40; Thin when exactly one holds; Skip when neither holds.</p></section>';
   }
 
   function controls() {
@@ -140,10 +148,10 @@
     }
     var html = '<div class="card" style="padding:0;overflow-x:auto"><table><thead><tr>' +
       th('rank', '#') + '<th>Protocol</th>' + th('tvl', 'TVL', 'num') + th('change', '7d', 'num') +
-      th('age', 'Age', 'num') + th('implied', 'Implied value', 'num') + '<th>Status</th>' +
+      th('age', 'Age', 'num') + th('implied', 'Implied value', 'num') + '<th>Verdict</th><th>Status</th>' +
       '</tr></thead><tbody>';
     if (!rows.length) {
-      html += '<tr><td colspan="7"><div class="empty">No protocols match this filter.</div></td></tr>';
+      html += '<tr><td colspan="8"><div class="empty">No protocols match this filter.</div></td></tr>';
     }
     rows.forEach(function (r) {
       var chg = r.change_7d == null ? '<span>—</span>' : '<span class="' + (r.change_7d >= 0 ? 'up' : 'down') + '">' + pct(r.change_7d) + '</span>';
@@ -154,6 +162,7 @@
         '<td class="num">' + chg + '</td>' +
         '<td class="num">' + ageText(r.age_days) + '</td>' +
         '<td class="num"><strong>' + money(r.implied_value_usd) + '</strong></td>' +
+        '<td>' + verdictPill(r) + '</td>' +
         '<td>' + pill(r) + '</td></tr>';
     });
     return html + '</tbody></table></div>';
@@ -168,6 +177,11 @@
       ? '<div><b>' + moneyFull(r.mcap_usd) + '</b><span>actual market cap</span></div>' +
         '<div><b>' + (r.actual_over_modeled == null ? '—' : r.actual_over_modeled.toFixed(2) + '×') + '</b><span>actual / modelled value</span></div>'
       : '<div><b>No token recorded</b><span>DefiLlama lists no gecko_id or symbol — that is what the record says, not proof it has none</span></div>';
+    var band = '<div><b>' + moneyFull(r.band_low) + ' – ' + moneyFull(r.band_high) + '</b><span>bootstrap band (10th–90th percentile of 200 refits; fit uncertainty only)</span></div>';
+    var plan = r.status === 'pre-token'
+      ? '<div><b>$' + r.plan_cost_usd.toFixed(2) + '</b><span>total plan cost (planning assumptions)</span></div>' +
+        '<div><b>' + (r.verdict || '—') + '</b><span>farm verdict</span></div>'
+      : '<div><b>Comparison only</b><span>token trades — no farm verdict</span></div>';
     var flags = [];
     if (r.change_7d == null) flags.push('7-day change missing — median week used');
     if (r.listed_at == null) flags.push('listing date missing — age imputed from the no-token median');
@@ -176,6 +190,12 @@
     var exclLine = r.watchlist
       ? '<p>On the watchlist: TVL at or above the $50M floor, no token recorded, and not a wrapped, staked or bridged product.</p>'
       : '<p>Outside the watchlist: ' + esc(r.exclusion || 'no reason recorded') + '.</p>';
+    var mm = R.meta;
+    var fitLine = 'ln mcap = ' + mm.coef_intercept.toFixed(3) +
+      ' + ' + mm.coef_log_tvl.toFixed(3) + '×ln(' + r.tvl_usd.toLocaleString('en-US') + ')' +
+      ' ' + (mm.coef_growth >= 0 ? '+' : '−') + ' ' + Math.abs(mm.coef_growth).toFixed(3) + '×(' + r.growth_pp.toFixed(2) + ')' +
+      ' ' + (mm.coef_log_age >= 0 ? '+' : '−') + ' ' + Math.abs(mm.coef_log_age).toFixed(3) + '×ln(' + (r.age_days == null ? '—' : (r.age_days + 1)) + ')' +
+      ' = ' + r.pred_ln_mcap.toFixed(2) + ' → exp = ' + moneyFull(r.implied_value_usd);
     return '<section class="detail" id="detail"><button class="back" id="back">← Back to the board</button>' +
       '<h2>' + esc(r.name) + ' ' + pill(r) + '</h2>' +
       '<p class="meta">Rank #' + r.rank + ' · ' + esc(r.slug) + ' · ' + esc(r.category || 'Uncategorised') + ' · ' + esc(r.chains.join(', ')) + ' · first tracked ' + (r.listed_at == null ? 'unknown' : esc(r.listed_at)) + ' · listed age ' + (r.age_days == null ? '—' : ageText(r.age_days)) + (r.age_imputed ? ' (imputed)' : '') + '</p>' +
@@ -183,10 +203,10 @@
       '<div><b>' + moneyFull(r.implied_value_usd) + '</b><span>implied value</span></div>' +
       '<div><b>' + moneyFull(r.tvl_usd) + '</b><span>TVL (snapshot figure)</span></div>' +
       '<div><b>' + pct(r.change_7d) + '</b><span>TVL change, 7 days (snapshot figure)</span></div>' +
-      mcap +
+      mcap + band + plan +
       '</div>' +
-      '<div class="breakdown">implied = ' + moneyFull(r.tvl_usd) + ' × ' + r.multiple.toFixed(4) + ' (market multiple) × ' + r.growth_factor.toFixed(3) + ' (growth) × ' + r.age_factor.toFixed(3) + ' (age) = ' + moneyFull(r.implied_value_usd) + '</div>' +
-      '<p>Multiple: median market-cap-per-TVL of ' + R.meta.live_count + ' live protocols (interquartile range ' + R.meta.multiple_q25.toFixed(3) + '–' + R.meta.multiple_q75.toFixed(3) + '). Growth compares this week’s change with the snapshot median week (' + R.meta.g50.toFixed(2) + 'pp). Age is listed age — time since DefiLlama began tracking — not verified operating age. Coefficients 0.25, 0.8 and 0.4 are design assumptions, not estimated relationships.</p>' +
+      '<div class="breakdown">' + esc(fitLine) + '</div>' +
+      '<p>The coefficients are fitted by ordinary least squares on ' + mm.comps_count + ' comparable traded tokens in this snapshot (market cap and TVL both positive, excluding centralised exchanges, liquid staking/restaking, bridges and restaked BTC). Out of sample: 5-fold cross-validation misses by ×' + mm.cv5_factor.toFixed(2) + ' (median multiplicative error); an age-cohort holdout (fit the 34 older-listed comps, test the 34 newer-listed ones; 68 dated comps, 22 excluded for missing dates) misses by ×' + mm.time_split_factor.toFixed(2) + ' (R² ' + mm.r2.toFixed(2) + '). Growth enters in percentage points with a small coefficient (' + mm.coef_growth.toFixed(3) + '), so a typical week moves the fitted value little — a +10-point week lowers it by about 18% — while older listings price lower for the same TVL. Those are the fitted results, not a story imposed on them. Age is listed age — time since DefiLlama began tracking — not verified operating age.</p>' +
       exclLine +
       flagLine +
       '<h3 style="margin:14px 0 4px">How to farm it</h3>' +
